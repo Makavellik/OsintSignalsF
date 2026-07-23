@@ -1,4 +1,4 @@
-import time, statistics, hashlib, re, sys, signal
+import time, statistics, hashlib, re, sys, signal, random
 import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
@@ -21,116 +21,133 @@ console = Console()
 
 # ----------------------------- SESSION --------------------------------
 def build_session():
-    # ------------------------------------------------------------------
-    # 🧬 Perfiles de cliente (coherentes internamente)
-    # ------------------------------------------------------------------
-    PROFILES = [
+    """
+    Construye una sesión HTTP consistente para observación.
+
+    Objetivos:
+        • Cliente estable.
+        • Headers coherentes.
+        • Reintentos controlados.
+        • Lectura reproducible.
+
+    No modifica el comportamiento del escáner.
+    Solo mejora la calidad de las observaciones.
+    """
+
+    # ---------------------------------------------------------
+    # Perfiles simples y coherentes
+    # ---------------------------------------------------------
+    profiles = [
         {
-            "name": "desktop_chrome",
-            "ua": [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            ],
-            "headers": {
-                "Accept": (
-                    "text/html,application/xhtml+xml,application/xml;"
-                    "q=0.9,image/avif,image/webp,*/*;q=0.8"
-                ),
-                "Upgrade-Insecure-Requests": "1",
-            }
+            "name": "chrome",
+            "user_agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
         },
         {
-            "name": "desktop_firefox",
-            "ua": [
+            "name": "firefox",
+            "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) "
-                "Gecko/20100101 Firefox/124.0",
-                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:123.0) "
-                "Gecko/20100101 Firefox/123.0",
-            ],
-            "headers": {
-                "Accept": (
-                    "text/html,application/xhtml+xml,application/xml;"
-                    "q=0.9,*/*;q=0.8"
-                ),
-            }
+                "Gecko/20100101 Firefox/124.0"
+            ),
         },
         {
             "name": "mobile",
-            "ua": [
-                "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 "
-                "Mobile/15E148 Safari/604.1",
-            ],
-            "headers": {
-                "Accept": (
-                    "text/html,application/xhtml+xml,application/xml;"
-                    "q=0.9,*/*;q=0.8"
-                ),
-            }
+            "user_agent": (
+                "Mozilla/5.0 (Linux; Android 14) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/123.0 Mobile Safari/537.36"
+            ),
         },
-        {
-            "name": "tooling_legit",
-            "ua": [
-                "curl/8.5.0",
-                "Wget/1.21.4",
-            ],
-            "headers": {
-                "Accept": "*/*",
-            }
-        }
     ]
 
-    # ------------------------------------------------------------------
-    # 🎛️ Selección polimórfica 
-    # ------------------------------------------------------------------
-    seed = int(time.time() // 60)  # cambia aprox cada minuto
-    profile = PROFILES[seed % len(PROFILES)]
-    ua = profile["ua"][seed % len(profile["ua"])]
+    # ---------------------------------------------------------
+    # Rotación ligera
+    # ---------------------------------------------------------
+    profile = random.choice(profiles)
 
-    # ------------------------------------------------------------------
-    # 🛠️ Construcción de sesión
-    # ------------------------------------------------------------------
-    s = requests.Session()
+    session = requests.Session()
 
-    # --- Headers base universales (no sospechosos)
-    base_headers = {
-        "User-Agent": ua,
+    session.headers.update({
+
+        "User-Agent": profile["user_agent"],
+
+        "Accept": (
+            "text/html,"
+            "application/xhtml+xml,"
+            "application/xml;q=0.9,"
+            "image/avif,"
+            "image/webp,"
+            "*/*;q=0.8"
+        ),
+
         "Accept-Language": "en-US,en;q=0.9",
+
         "Accept-Encoding": "gzip, deflate, br",
+
         "Connection": "keep-alive",
+
+        "Upgrade-Insecure-Requests": "1",
+
         "DNT": "1",
-    }
 
-    # --- Merge seguro
-    base_headers.update(profile.get("headers", {}))
-    s.headers.update(base_headers)
+    })
 
-    # ------------------------------------------------------------------
-    # 🛡️ Resiliencia de red (no cambia semántica)
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
+    # Adaptador resiliente
+    # ---------------------------------------------------------
     retry = Retry(
+
         total=RETRIES,
+
         connect=RETRIES,
+
         read=RETRIES,
-        backoff_factor=0.3,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET", "HEAD", "OPTIONS", "POST"])
+
+        backoff_factor=0.35,
+
+        status_forcelist=(
+            429,
+            500,
+            502,
+            503,
+            504,
+        ),
+
+        allowed_methods=frozenset({
+            "GET",
+            "HEAD",
+            "OPTIONS",
+            "POST",
+        }),
+
+        raise_on_status=False,
+
     )
 
     adapter = HTTPAdapter(
+
         max_retries=retry,
+
         pool_connections=10,
-        pool_maxsize=10
+
+        pool_maxsize=10,
+
     )
 
-    s.mount("http://", adapter)
-    s.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
 
-    return s
+    # ---------------------------------------------------------
+    # Metadatos útiles para el resto del motor
+    # ---------------------------------------------------------
+    session.profile = profile["name"]
+
+    session.created_at = time.time()
+
+    return session
 
 
 
@@ -147,380 +164,1766 @@ def hash_body(text):
 # ------------------------ HTTP SEMANTICS -------------------------------
 def http_semantics(session, url):
     """
-    Lectura semántica HTTP.
-    Activo-quirúrgico, sin explotación.
+    Lectura semántica HTTP avanzada.
+
+    Filosofía:
+    - Activo quirúrgico
+    - Pasivo contextual
+    - Sin explotación
+    - Orientado a observación, coherencia y comportamiento
+
+    Analiza:
+    - estabilidad de respuesta
+    - identidad temporal
+    - consistencia semántica
+    - cache behavior
+    - fingerprints operativos
     """
 
     responses = []
     errors = []
 
-    # --- Lecturas repetidas controladas (consistencia real)
+    timestamps = []
+
+    # =====================================================
+    # OBSERVACIÓN REPETIDA CONTROLADA
+    # =====================================================
+
     for _ in range(3):
         try:
-            responses.append(session.get(url, timeout=TIMEOUT))
+            start = time.time()
+
+            response = session.get(
+                url,
+                timeout=TIMEOUT
+            )
+
+            elapsed = int(
+                (time.time() - start) * 1000
+            )
+
+            responses.append(response)
+            timestamps.append(elapsed)
+
         except Exception as e:
             errors.append(str(e))
 
-    # Fallback seguro
+
     if not responses:
-        raise RuntimeError("No HTTP responses obtained")
+        raise RuntimeError(
+            "No HTTP responses obtained"
+        )
+
 
     r1 = responses[0]
     h = r1.headers
 
-    # --- Hashes de cuerpo (deriva semántica)
-    body_hashes = [hash_body(r.text) for r in responses]
-    hash_change = len(set(body_hashes)) > 1
 
-    # --- HEAD vs GET coherencia (activo legítimo)
-    try:
-        r_head = session.head(url, timeout=TIMEOUT)
-        head_len = int(r_head.headers.get("Content-Length", -1))
-        head_mismatch = head_len != -1 and abs(head_len - len(r1.text)) > 128
-    except Exception:
-        head_mismatch = False
+    # =====================================================
+    # DERIVA SEMÁNTICA DEL CONTENIDO
+    # =====================================================
 
-    # --- Cache & validadores
-    etag = h.get("ETag")
-    cache_control = h.get("Cache-Control", "")
-    vary = h.get("Vary", "")
+    body_hashes = [
+        hash_body(r.text)
+        for r in responses
+    ]
 
-    cache_signals = {
-        "etag_present": bool(etag),
-        "cache_control": cache_control,
-        "vary_present": bool(vary),
-        "cache_ambiguous": (
-            "no-cache" not in cache_control.lower()
-            and "no-store" not in cache_control.lower()
-            and not etag
-        )
-    }
-
-    # --- Coherencia de tipo de contenido
-    content_type = h.get("Content-Type", "")
-    semantic_mismatch = (
-        "json" in content_type.lower()
-        and not r1.text.strip().startswith(("{", "["))
+    hash_change = (
+        len(set(body_hashes)) > 1
     )
 
-    # --- Retorno compatible + enriquecido
-    return {
-        "status": r1.status_code,
-        "len": len(r1.text),
-        "hash_change": hash_change,
-        "etag": bool(etag),
-        "cache": cache_control,
 
-        # 🔬 Señales avanzadas (no rompen flujo)
-        "head_mismatch": head_mismatch,
-        "semantic_mismatch": semantic_mismatch,
-        "cache_signals": cache_signals,
-        "vary": vary,
-        "errors": errors
+    body_sizes = [
+        len(r.text)
+        for r in responses
+    ]
+
+
+    size_variation = (
+        max(body_sizes) -
+        min(body_sizes)
+    )
+
+
+    # =====================================================
+    # LATENCIA Y COMPORTAMIENTO
+    # =====================================================
+
+    avg_latency = (
+        sum(timestamps) / len(timestamps)
+        if timestamps
+        else None
+    )
+
+
+    latency_variance = (
+        max(timestamps) -
+        min(timestamps)
+        if timestamps
+        else 0
+    )
+
+
+    # =====================================================
+    # HEAD VS GET
+    # =====================================================
+
+    try:
+
+        r_head = session.head(
+            url,
+            timeout=TIMEOUT
+        )
+
+        head_len = int(
+            r_head.headers.get(
+                "Content-Length",
+                -1
+            )
+        )
+
+        head_mismatch = (
+            head_len != -1
+            and abs(head_len - len(r1.text)) > 128
+        )
+
+
+    except Exception:
+
+        head_mismatch = False
+
+
+
+    # =====================================================
+    # CACHE / DELIVERY SEMANTICS
+    # =====================================================
+
+    etag = h.get("ETag")
+
+    cache_control = (
+        h.get(
+            "Cache-Control",
+            ""
+        )
+    )
+
+    vary = (
+        h.get(
+            "Vary",
+            ""
+        )
+    )
+
+
+    age = h.get("Age")
+
+    cache_signals = {
+
+        "etag_present":
+            bool(etag),
+
+        "cache_control":
+            cache_control,
+
+        "vary_present":
+            bool(vary),
+
+        "age_present":
+            bool(age),
+
+        "cdn_cache_hint":
+            bool(age),
+
+        "cache_ambiguous":
+            (
+                "no-cache" not in cache_control.lower()
+                and
+                "no-store" not in cache_control.lower()
+                and
+                not etag
+            )
+    }
+
+
+
+    # =====================================================
+    # COHERENCIA DE CONTENIDO
+    # =====================================================
+
+    content_type = (
+        h.get(
+            "Content-Type",
+            ""
+        )
+    )
+
+
+    text_sample = (
+        r1.text.strip()[:50]
+    )
+
+
+    semantic_mismatch = (
+
+        "json" in content_type.lower()
+
+        and
+
+        not text_sample.startswith(
+            (
+                "{",
+                "["
+            )
+        )
+    )
+
+
+    # =====================================================
+    # IDENTIDAD OPERATIVA
+    # =====================================================
+
+    server = h.get(
+        "Server"
+    )
+
+    powered = h.get(
+        "X-Powered-By"
+    )
+
+
+    exposure_signals = {
+
+        "server_visible":
+            bool(server),
+
+        "framework_visible":
+            bool(powered),
+
+        "technology_disclosure":
+            bool(
+                server
+                or powered
+            )
+
+    }
+
+
+
+    # =====================================================
+    # LECTURA INVERSA
+    # =====================================================
+
+    behavioral = {
+
+        "dynamic_content":
+            hash_change,
+
+        "unstable_size":
+            size_variation > 512,
+
+        "slow_backend":
+            avg_latency is not None
+            and avg_latency > 2000,
+
+        "response_variance":
+            latency_variance > 500,
+
+        "possible_edge_layer":
+            bool(age)
+            or bool(vary)
+
+    }
+
+
+
+    # =====================================================
+    # RETORNO COMPATIBLE
+    # =====================================================
+
+    return {
+
+        # originales
+        "status":
+            r1.status_code,
+
+        "len":
+            len(r1.text),
+
+        "hash_change":
+            hash_change,
+
+        "etag":
+            bool(etag),
+
+        "cache":
+            cache_control,
+
+
+        # existentes enriquecidos
+
+        "head_mismatch":
+            head_mismatch,
+
+        "semantic_mismatch":
+            semantic_mismatch,
+
+        "cache_signals":
+            cache_signals,
+
+        "vary":
+            vary,
+
+        "errors":
+            errors,
+
+
+        # nuevas capas SOC
+
+        "behavior":
+
+            behavioral,
+
+
+        "performance":
+
+            {
+                "samples":
+                    len(responses),
+
+                "latencies_ms":
+                    timestamps,
+
+                "average_ms":
+                    avg_latency,
+
+                "variance_ms":
+                    latency_variance
+            },
+
+
+        "delivery_identity":
+
+            exposure_signals,
+
+
+        "metadata":
+
+            {
+                "body_hashes":
+                    body_hashes,
+
+                "size_variation":
+                    size_variation,
+
+                "content_type":
+                    content_type,
+
+                "age_header":
+                    age
+            }
+
     }, r1
 
 
 # ------------------------ DOM PROFUNDO --------------------------------
 def dom_deep(html):
     """
-    Análisis DOM profundo con lectura semántica .
-    Pasivo + activo ligero (lectura), sin ejecución.
+    Análisis DOM profundo con lectura semántica avanzada.
+
+    Filosofía:
+    - Pasivo
+    - Lectura estructural
+    - Sin ejecución JavaScript
+    - Sin interacción destructiva
+
+    Observa:
+    - arquitectura frontend
+    - exposición de lógica
+    - estado cliente
+    - comunicación web
+    - madurez tecnológica
     """
 
     try:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
+        )
+
     except Exception:
+
         return {
             "scripts": 0,
             "hidden_inputs": 0,
             "data_actions": 0,
             "js_network": False,
-            "signals": ["html_parse_error"]
+            "signals": [
+                "html_parse_error"
+            ]
         }
 
-    scripts = soup.find_all("script")
-    hidden = soup.select("input[type=hidden]")
-    actions = soup.find_all(attrs={"data-action": True})
 
-    # --- JS inline real (no vacío / no loader)
-    inline_js = [
-        s.string for s in scripts
-        if s.string and len(s.string.strip()) > 40
-    ]
+    # =====================================================
+    # ELEMENTOS BASE
+    # =====================================================
 
-    # --- Red JS ampliada
-    js_network = any(
-        kw in js
-        for js in inline_js
-        for kw in (
-            "fetch(", "axios", "XMLHttpRequest",
-            "WebSocket", ".send(", "navigator.sendBeacon"
-        )
+    scripts = soup.find_all(
+        "script"
     )
 
-    # --- Señales SPA / frameworks
+    hidden = soup.select(
+        "input[type=hidden]"
+    )
+
+    actions = soup.find_all(
+        attrs={
+            "data-action": True
+        }
+    )
+
+
+    forms = soup.find_all(
+        "form"
+    )
+
+
+    links = soup.find_all(
+        "a",
+        href=True
+    )
+
+
+    # =====================================================
+    # JAVASCRIPT REAL
+    # =====================================================
+
+    inline_js = [
+
+        s.string
+
+        for s in scripts
+
+        if s.string
+        and len(s.string.strip()) > 40
+
+    ]
+
+
+    external_scripts = [
+
+        s.get("src")
+
+        for s in scripts
+
+        if s.get("src")
+
+    ]
+
+
+    # =====================================================
+    # COMUNICACIÓN CLIENTE ↔ SERVIDOR
+    # =====================================================
+
+    network_patterns = (
+
+        "fetch(",
+        "axios",
+        "XMLHttpRequest",
+        "WebSocket",
+        ".send(",
+        "navigator.sendBeacon",
+        "graphql",
+        "/api/",
+        "socket.io"
+    )
+
+
+    js_network = any(
+
+        pattern in js
+
+        for js in inline_js
+
+        for pattern in network_patterns
+
+    )
+
+
+    # =====================================================
+    # FRAMEWORK INTELLIGENCE
+    # =====================================================
+
     framework_hints = {
-        "react": bool(soup.find(attrs={"data-reactroot": True})) or "__REACT_DEVTOOLS_GLOBAL_HOOK__" in html,
-        "vue": "data-v-" in html or "__VUE_DEVTOOLS_GLOBAL_HOOK__" in html,
-        "angular": "ng-version" in html or "angular.module" in html,
-        "next": "__NEXT_DATA__" in html
+
+        "react":
+
+            bool(
+                soup.find(
+                    attrs={
+                        "data-reactroot": True
+                    }
+                )
+            )
+
+            or
+
+            "__REACT_DEVTOOLS_GLOBAL_HOOK__"
+            in html,
+
+
+        "vue":
+
+            "data-v-" in html
+
+            or
+
+            "__VUE_DEVTOOLS_GLOBAL_HOOK__"
+            in html,
+
+
+        "angular":
+
+            "ng-version" in html
+
+            or
+
+            "angular.module"
+            in html,
+
+
+        "next":
+
+            "__NEXT_DATA__"
+            in html,
+
+
+        "svelte":
+
+            "svelte"
+            in html.lower()
+
     }
 
-    spa_detected = any(framework_hints.values())
 
-    # --- Inputs ocultos con semántica sensible
-    hidden_sensitive = [
-        i.get("name","").lower()
-        for i in hidden
-        if any(k in (i.get("name","")+i.get("id","")).lower()
-               for k in ("token", "csrf", "auth", "session", "state"))
-    ]
-
-    # --- Eventos activos inline (cliente reactivo)
-    event_attrs = sum(
-        1 for tag in soup.find_all()
-        for attr in tag.attrs
-        if attr.startswith("on")
+    spa_detected = any(
+        framework_hints.values()
     )
 
-    # --- Scripts externos (posible backend split)
-    external_scripts = [
-        s.get("src") for s in scripts if s.get("src")
+
+    # =====================================================
+    # ESTADO OCULTO
+    # =====================================================
+
+    hidden_sensitive = [
+
+        i.get("name","").lower()
+
+        for i in hidden
+
+        if any(
+
+            key in (
+
+                i.get("name","")
+                +
+                i.get("id","")
+
+            ).lower()
+
+            for key in (
+
+                "token",
+                "csrf",
+                "auth",
+                "session",
+                "state",
+                "nonce"
+
+            )
+
+        )
+
     ]
 
-    # --- Señales finales interpretadas
+
+    # =====================================================
+    # INTERACTIVIDAD CLIENTE
+    # =====================================================
+
+    event_attrs = sum(
+
+        1
+
+        for tag in soup.find_all()
+
+        for attr in tag.attrs
+
+        if attr.startswith("on")
+
+    )
+
+
+    # =====================================================
+    # RECURSOS EXTERNOS
+    # =====================================================
+
+    external_domains = []
+
+    for src in external_scripts:
+
+        if src:
+
+            external_domains.append(
+                src.split("/")[2]
+                if "//" in src
+                else src
+            )
+
+
+    # =====================================================
+    # DENSIDAD FRONTEND
+    # =====================================================
+
+    dom_complexity = {
+
+        "html_size":
+
+            len(html),
+
+
+        "tag_count":
+
+            len(
+                soup.find_all()
+            ),
+
+
+        "script_ratio":
+
+            len(scripts)
+            /
+            max(
+                len(soup.find_all()),
+                1
+            )
+
+    }
+
+
+
+    # =====================================================
+    # SEÑALES INTERPRETADAS
+    # =====================================================
+
     signals = []
 
+
     if js_network:
-        signals.append("active_js_network")
+        signals.append(
+            "active_js_network"
+        )
+
 
     if spa_detected:
-        signals.append("spa_frontend")
+        signals.append(
+            "spa_frontend"
+        )
+
 
     if hidden_sensitive:
-        signals.append("hidden_state_tokens")
+        signals.append(
+            "hidden_state_tokens"
+        )
+
 
     if event_attrs > 20:
-        signals.append("high_client_interactivity")
+        signals.append(
+            "high_client_interactivity"
+        )
+
 
     if len(external_scripts) > len(inline_js):
-        signals.append("logic_externalized")
+        signals.append(
+            "logic_externalized"
+        )
 
-    # --- Retorno compatible + enriquecido
-    return {
-        "scripts": len(scripts),
-        "hidden_inputs": len(hidden),
-        "data_actions": len(actions),
-        "js_network": js_network,
 
-        # 🔬 Profundidad añadida (no rompe nada)
-        "inline_js_blocks": len(inline_js),
-        "external_scripts": len(external_scripts),
-        "hidden_sensitive": hidden_sensitive,
-        "event_handlers": event_attrs,
-        "framework_hints": framework_hints,
-        "signals": signals
+    if len(forms) > 5:
+        signals.append(
+            "form_heavy_application"
+        )
+
+
+    if len(external_domains) > 5:
+        signals.append(
+            "third_party_dependency_heavy"
+        )
+
+
+
+    # =====================================================
+    # LECTURA INVERSA
+    # =====================================================
+
+    architecture = {
+
+        "client_heavy":
+
+            len(scripts)
+            >
+            len(forms),
+
+
+        "backend_hidden":
+
+            js_network
+            and spa_detected,
+
+
+        "simple_site":
+
+            len(scripts) < 3
+            and not spa_detected,
+
+
+        "complex_frontend":
+
+            len(scripts) > 10
+            or event_attrs > 30
+
     }
 
+
+
+    # =====================================================
+    # RETORNO COMPATIBLE
+    # =====================================================
+
+    return {
+
+        # originales
+
+        "scripts":
+            len(scripts),
+
+        "hidden_inputs":
+            len(hidden),
+
+        "data_actions":
+            len(actions),
+
+        "js_network":
+            js_network,
+
+
+        # profundidad añadida
+
+        "inline_js_blocks":
+            len(inline_js),
+
+        "external_scripts":
+            len(external_scripts),
+
+        "hidden_sensitive":
+            hidden_sensitive,
+
+        "event_handlers":
+            event_attrs,
+
+        "framework_hints":
+            framework_hints,
+
+        "signals":
+            signals,
+
+
+        # nueva lectura SOC
+
+        "forms":
+            len(forms),
+
+
+        "external_domains":
+            external_domains,
+
+
+        "dom_complexity":
+            dom_complexity,
+
+
+        "architecture":
+
+            architecture,
+
+
+        "meta":
+
+            {
+                "analysis":
+                    "passive_dom_semantics",
+
+                "execution":
+                    False,
+
+                "correlation_ready":
+                    True
+
+            }
+
+    }
 
 # ------------------------ TIMING DIFERENCIAL (ADVANCED) ---------------------------
 def timing_diff(session, url):
     """
-    Análisis temporal diferencial GET / HEAD / OPTIONS
-    Lectura forense de backend sin agresividad.
+    Análisis temporal diferencial GET / HEAD / OPTIONS.
+
+    Lectura forense de comportamiento HTTP.
+
+    Filosofía:
+    - activo controlado
+    - no intrusivo
+    - orientado a señales
+    - sin explotación
+
+    Observa:
+    - diferencias entre métodos
+    - estabilidad temporal
+    - posibles capas intermedias
+    - coherencia del backend
     """
 
     def measure(method):
+
         timings = []
+
+        errors = 0
+
+
         for _ in range(TIMING_SAMPLES):
+
             try:
+
                 t0 = time.time()
-                session.request(method, url, timeout=TIMEOUT)
+
+                response = session.request(
+                    method,
+                    url,
+                    timeout=TIMEOUT
+                )
+
                 dt = time.time() - t0
 
-                # clamp suave anti-picos (ruido de red)
-                if 0 < dt < TIMEOUT:
-                    timings.append(dt)
-            except Exception:
-                continue
-        return timings
 
-    # --- Warm-up silencioso (reduce cold-start / cache miss)
+                # =========================
+                # FILTRO SUAVE DE RUIDO
+                # =========================
+
+                if (
+                    0 < dt < TIMEOUT
+                ):
+                    timings.append(dt)
+
+
+            except Exception:
+
+                errors += 1
+
+                continue
+
+
+        return timings, errors
+
+
+
+    # =====================================================
+    # WARM-UP
+    # =====================================================
+
     try:
-        session.get(url, timeout=TIMEOUT)
+
+        session.get(
+            url,
+            timeout=TIMEOUT
+        )
+
     except Exception:
+
         pass
 
-    g = measure("GET")
-    h = measure("HEAD")
-    o = measure("OPTIONS")
 
-    # --- Fallback seguro
+
+    # =====================================================
+    # MEDICIÓN MULTIMÉTODO
+    # =====================================================
+
+    g, g_errors = measure(
+        "GET"
+    )
+
+    h, h_errors = measure(
+        "HEAD"
+    )
+
+    o, o_errors = measure(
+        "OPTIONS"
+    )
+
+
+
+    # =====================================================
+    # FALLBACK SEGURO
+    # =====================================================
+
     if not g or not o:
+
         return {
+
             "get_avg": None,
+
             "head_avg": None,
+
             "opt_avg": None,
+
             "jitter": None,
+
             "jitter_high": False,
+
             "method_gap": False,
-            "signals": ["insufficient_samples"]
+
+            "signals": [
+                "insufficient_samples"
+            ]
+
         }
 
-    get_avg = statistics.mean(g)
-    opt_avg = statistics.mean(o)
-    head_avg = statistics.mean(h) if h else 0
 
-    jitter = statistics.pstdev(g) if len(g) > 1 else 0
-    gap = abs(get_avg - opt_avg)
 
-    # --- Lectura semántica
-    signals = []
+    # =====================================================
+    # MÉTRICAS BASE
+    # =====================================================
 
-    if jitter > JITTER_THRESHOLD:
-        signals.append("timing_instability")
+    get_avg = statistics.mean(
+        g
+    )
 
-    if gap > 0.6:
-        signals.append("method_processing_gap")
+    opt_avg = statistics.mean(
+        o
+    )
 
-    if head_avg and head_avg < get_avg * 0.5:
-        signals.append("head_optimized")
+    head_avg = (
+        statistics.mean(h)
+        if h
+        else 0
+    )
 
-    if opt_avg > get_avg * 1.3:
-        signals.append("options_heavy_logic")
 
-    if jitter < 0.15 and gap < 0.2:
-        signals.append("uniform_backend_path")
+    jitter = (
 
-    # --- Retorno compatible + enriquecido
-    return {
-        "get_avg": round(get_avg, 3),
-        "head_avg": round(head_avg, 3),
-        "opt_avg": round(opt_avg, 3),
-        "jitter": round(jitter, 3),
-        "jitter_high": jitter > JITTER_THRESHOLD,
-        "method_gap": gap > 0.6,
+        statistics.pstdev(g)
 
-        # 🔬 extras forenses (no rompen nada)
-        "samples": {
-            "get": len(g),
-            "head": len(h),
-            "options": len(o)
-        },
-        "signals": signals
+        if len(g) > 1
+
+        else 0
+
+    )
+
+
+    gap = abs(
+        get_avg -
+        opt_avg
+    )
+
+
+
+    # =====================================================
+    # DISPERSIÓN TEMPORAL
+    # =====================================================
+
+    get_range = (
+
+        max(g) -
+        min(g)
+
+        if g
+
+        else 0
+
+    )
+
+
+    method_latency = {
+
+        "GET_vs_HEAD":
+
+            abs(
+                get_avg -
+                head_avg
+            )
+            if head_avg
+            else None,
+
+
+        "GET_vs_OPTIONS":
+
+            gap
+
     }
 
+
+
+    # =====================================================
+    # LECTURA SEMÁNTICA
+    # =====================================================
+
+    signals = []
+
+
+    if jitter > JITTER_THRESHOLD:
+
+        signals.append(
+            "timing_instability"
+        )
+
+
+    if gap > 0.6:
+
+        signals.append(
+            "method_processing_gap"
+        )
+
+
+    if (
+        head_avg
+        and
+        head_avg < get_avg * 0.5
+    ):
+
+        signals.append(
+            "head_optimized"
+        )
+
+
+    if opt_avg > get_avg * 1.3:
+
+        signals.append(
+            "options_heavy_logic"
+        )
+
+
+    if (
+        jitter < 0.15
+        and
+        gap < 0.2
+    ):
+
+        signals.append(
+            "uniform_backend_path"
+        )
+
+
+
+    # =====================================================
+    # NUEVAS SEÑALES SOC
+    # =====================================================
+
+    behavior = {
+
+        "stable_response":
+
+            jitter < JITTER_THRESHOLD,
+
+
+        "high_variance":
+
+            get_range > 1.0,
+
+
+        "method_divergence":
+
+            gap > 0.6,
+
+
+        "possible_cache_layer":
+
+            (
+                head_avg
+                and
+                head_avg < get_avg * 0.5
+            ),
+
+
+        "backend_consistent":
+
+            (
+                jitter < 0.15
+                and
+                gap < 0.2
+            )
+
+    }
+
+
+
+    # =====================================================
+    # PERFIL TEMPORAL
+    # =====================================================
+
+    if (
+        jitter < 0.15
+        and gap < 0.2
+    ):
+
+        profile = "predictable"
+
+
+    elif jitter > JITTER_THRESHOLD:
+
+        profile = "dynamic"
+
+
+    else:
+
+        profile = "mixed"
+
+
+
+    # =====================================================
+    # RETORNO COMPATIBLE
+    # =====================================================
+
+    return {
+
+
+        # originales
+
+        "get_avg":
+            round(get_avg, 3),
+
+
+        "head_avg":
+            round(head_avg, 3),
+
+
+        "opt_avg":
+            round(opt_avg, 3),
+
+
+        "jitter":
+            round(jitter, 3),
+
+
+        "jitter_high":
+            jitter > JITTER_THRESHOLD,
+
+
+        "method_gap":
+            gap > 0.6,
+
+
+
+        "samples":
+
+            {
+
+                "get":
+                    len(g),
+
+
+                "head":
+                    len(h),
+
+
+                "options":
+                    len(o)
+
+            },
+
+
+        "signals":
+            signals,
+
+
+
+        # nuevas capas
+
+        "statistics":
+
+            {
+
+                "get_range":
+                    round(get_range, 3),
+
+
+                "method_latency":
+
+                    method_latency
+
+            },
+
+
+        "errors":
+
+            {
+
+                "get":
+                    g_errors,
+
+
+                "head":
+                    h_errors,
+
+
+                "options":
+                    o_errors
+
+            },
+
+
+        "behavior":
+
+            behavior,
+
+
+        "profile":
+
+            profile,
+
+
+        "meta":
+
+            {
+
+                "analysis":
+                    "http_timing_behavior",
+
+
+                "correlation_ready":
+                    True,
+
+
+                "execution":
+                    "controlled"
+
+            }
+
+    }
 # ------------------------ SUPERFICIE BACKEND---------------------
 def backend_surface(session, url):
     """
-    Análisis de superficie backend:
-    OPTIONS + validación pasiva-activa ligera (sin mutar estado).
+    Análisis avanzado de superficie backend.
+
+    Filosofía:
+    - activo controlado
+    - pasivo contextual
+    - sin modificación de estado
+
+    Observa:
+    - métodos declarados
+    - comportamiento real
+    - capas intermedias
+    - coherencia backend
+    - exposición operativa
     """
 
     signals = []
     methods = []
     unusual = []
 
-    # --- OPTIONS primario
+    observations = {}
+    stimuli = []
+
+
+    # =====================================================
+    # OPTIONS PRIMARIO
+    # =====================================================
+
     try:
-        opt = session.options(url, timeout=TIMEOUT)
-        allow = opt.headers.get("Allow", "") or opt.headers.get("allow", "")
-    except Exception:
-        return {
-            "methods": [],
-            "unusual": [],
-            "risk_profile": "unknown",
-            "signals": ["options_unavailable"]
-        }
 
-    # --- Normalización
-    methods = sorted({
-        m.strip().upper()
-        for m in allow.split(",")
-        if m.strip()
-    })
-
-    # --- Clasificación semántica
-    safe_methods = {"GET", "HEAD", "OPTIONS"}
-    common_methods = {"POST", "PUT", "DELETE", "PATCH"}
-    exotic_methods = {
-        "TRACE", "CONNECT", "DEBUG", "PROPFIND",
-        "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"
-    }
-
-    unusual = [m for m in methods if m not in safe_methods | common_methods]
-
-    # --- Señales por exposición declarada
-    if "TRACE" in methods:
-        signals.append("trace_enabled")
-
-    if {"PUT", "DELETE", "PATCH"} & set(methods):
-        signals.append("state_changing_methods")
-
-    if any(m in exotic_methods for m in methods):
-        signals.append("exotic_methods_exposed")
-
-    if not methods:
-        signals.append("allow_header_empty")
-
-    if "OPTIONS" not in methods:
-        signals.append("options_not_advertised")
-
-    # ------------------------------------------------------------------
-    # 🔬 VALIDACIÓN ACTIVA LIGERA (SIN CAMBIOS DE ESTADO)
-    # ------------------------------------------------------------------
-
-    # 1️⃣ HEAD vs GET coherencia (misma ruta, sin cuerpo)
-    try:
-        r_head = session.head(url, timeout=TIMEOUT)
-        r_get = session.get(url, timeout=TIMEOUT)
-        if r_head.status_code != r_get.status_code:
-            signals.append("method_status_divergence")
-    except Exception:
-        pass
-
-    # 2️⃣ Method override pasivo (cabecera, sin mutar)
-    try:
-        r_override = session.post(
+        opt = session.options(
             url,
-            headers={"X-HTTP-Method-Override": "DELETE"},
             timeout=TIMEOUT
         )
-        if r_override.status_code not in (400, 405):
-            signals.append("method_override_accepted")
-    except Exception:
-        pass
 
-    # 3️⃣ Gateway / proxy fingerprint
-    proxy_headers = ("Via", "X-Forwarded-For", "X-Proxy", "X-Gateway")
+        allow = (
+            opt.headers.get("Allow", "")
+            or
+            opt.headers.get("allow", "")
+        )
+
+        observations["options_status"] = (
+            opt.status_code
+        )
+
+        observations["allow_header"] = (
+            allow
+        )
+
+
+    except Exception:
+
+        return {
+
+            "methods": [],
+            "unusual": [],
+
+            "risk_profile":
+                "unknown",
+
+            "signals":
+                [
+                    "options_unavailable"
+                ]
+
+        }
+
+
+
+    # =====================================================
+    # NORMALIZACIÓN
+    # =====================================================
+
+    methods = sorted({
+
+        m.strip().upper()
+
+        for m in allow.split(",")
+
+        if m.strip()
+
+    })
+
+
+    safe_methods = {
+
+        "GET",
+        "HEAD",
+        "OPTIONS"
+
+    }
+
+
+    common_methods = {
+
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH"
+
+    }
+
+
+    exotic_methods = {
+
+        "TRACE",
+        "CONNECT",
+        "DEBUG",
+        "PROPFIND",
+        "PROPPATCH",
+        "MKCOL",
+        "COPY",
+        "MOVE",
+        "LOCK",
+        "UNLOCK"
+
+    }
+
+
+    unusual = [
+
+        m
+
+        for m in methods
+
+        if m not in (
+            safe_methods
+            |
+            common_methods
+        )
+
+    ]
+
+
+
+    # =====================================================
+    # LECTURA DE MÉTODOS EXPUESTOS
+    # =====================================================
+
+    if "TRACE" in methods:
+
+        signals.append(
+            "trace_enabled"
+        )
+
+
+    if (
+        common_methods
+        &
+        set(methods)
+    ):
+
+        signals.append(
+            "state_changing_methods"
+        )
+
+
+    if any(
+        m in exotic_methods
+        for m in methods
+    ):
+
+        signals.append(
+            "exotic_methods_exposed"
+        )
+
+
+    if not methods:
+
+        signals.append(
+            "allow_header_empty"
+        )
+
+
+    if "OPTIONS" not in methods:
+
+        signals.append(
+            "options_not_advertised"
+        )
+
+
+
+    # =====================================================
+    # ESTÍMULO HEAD VS GET
+    # =====================================================
+
+    r_get = None
+
     try:
-        if any(h in r_get.headers for h in proxy_headers):
-            signals.append("gateway_or_proxy_detected")
+
+        stimuli.append(
+            "HEAD_GET_COMPARISON"
+        )
+
+        r_head = session.head(
+            url,
+            timeout=TIMEOUT
+        )
+
+
+        r_get = session.get(
+            url,
+            timeout=TIMEOUT
+        )
+
+
+        observations["head_status"] = (
+            r_head.status_code
+        )
+
+        observations["get_status"] = (
+            r_get.status_code
+        )
+
+
+        if (
+            r_head.status_code
+            !=
+            r_get.status_code
+        ):
+
+            signals.append(
+                "method_status_divergence"
+            )
+
+
     except Exception:
+
         pass
 
-    # 4️⃣ Coherencia Allow vs realidad
-    if "GET" not in methods and r_get.status_code < 400:
-        signals.append("allow_mismatch_real_behavior")
 
-    # ------------------------------------------------------------------
-    # 🧠 PERFIL DE RIESGO (SEMÁNTICO)
-    # ------------------------------------------------------------------
-    if any(m in exotic_methods for m in methods) or "method_override_accepted" in signals:
-        risk_profile = "elevated"
-    elif any(m in common_methods for m in methods):
-        risk_profile = "moderate"
+
+    # =====================================================
+    # ESTÍMULO METHOD OVERRIDE
+    # =====================================================
+
+    try:
+
+        stimuli.append(
+            "METHOD_OVERRIDE_CHECK"
+        )
+
+
+        r_override = session.post(
+
+            url,
+
+            headers={
+
+                "X-HTTP-Method-Override":
+                    "DELETE"
+
+            },
+
+            timeout=TIMEOUT
+
+        )
+
+
+        observations["override_status"] = (
+            r_override.status_code
+        )
+
+
+        if r_override.status_code not in (
+            400,
+            405
+        ):
+
+            signals.append(
+                "method_override_accepted"
+            )
+
+
+    except Exception:
+
+        pass
+
+
+
+    # =====================================================
+    # DETECCIÓN CAPAS INTERMEDIAS
+    # =====================================================
+
+    proxy_headers = (
+
+        "Via",
+        "X-Forwarded-For",
+        "X-Proxy",
+        "X-Gateway",
+        "X-Cache",
+        "CF-Ray",
+        "Server-Timing"
+
+    )
+
+
+    try:
+
+        if r_get:
+
+            detected = [
+
+                h
+
+                for h in proxy_headers
+
+                if h in r_get.headers
+
+            ]
+
+
+            if detected:
+
+                signals.append(
+                    "gateway_or_proxy_detected"
+                )
+
+
+                observations[
+                    "proxy_headers"
+                ] = detected
+
+
+    except Exception:
+
+        pass
+
+
+
+    # =====================================================
+    # DECLARACIÓN VS REALIDAD
+    # =====================================================
+
+    try:
+
+        if (
+
+            "GET" not in methods
+
+            and
+
+            r_get
+
+            and
+
+            r_get.status_code < 400
+
+        ):
+
+            signals.append(
+                "allow_mismatch_real_behavior"
+            )
+
+
+    except Exception:
+
+        pass
+
+
+
+    # =====================================================
+    # PERFIL SEMÁNTICO
+    # =====================================================
+
+    if (
+
+        any(
+            m in exotic_methods
+            for m in methods
+        )
+
+        or
+
+        "method_override_accepted"
+        in signals
+
+    ):
+
+        risk_profile = (
+            "elevated"
+        )
+
+
+    elif (
+
+        common_methods
+        &
+        set(methods)
+
+    ):
+
+        risk_profile = (
+            "moderate"
+        )
+
+
     elif methods:
-        risk_profile = "low"
-    else:
-        risk_profile = "unknown"
 
-    # --- Retorno compatible + más profundo
+        risk_profile = (
+            "low"
+        )
+
+
+    else:
+
+        risk_profile = (
+            "unknown"
+        )
+
+
+
+    # =====================================================
+    # LECTURA INVERSA BACKEND
+    # =====================================================
+
+    backend_profile = {
+
+        "method_surface":
+
+            len(methods),
+
+
+        "declared_complexity":
+
+            (
+                "high"
+                if len(methods) > 6
+                else
+                "normal"
+            ),
+
+
+        "stateful_behavior":
+
+            bool(
+                common_methods
+                &
+                set(methods)
+            ),
+
+
+        "intermediate_layer_hint":
+
+            (
+                "possible"
+                if
+                "gateway_or_proxy_detected"
+                in signals
+
+                else
+                "unknown"
+            )
+
+    }
+
+
+
+    # =====================================================
+    # RETORNO COMPATIBLE
+    # =====================================================
+
     return {
-        "methods": methods,
-        "unusual": unusual,
-        "risk_profile": risk_profile,
-        "signals": signals
+
+
+        # originales
+
+        "methods":
+            methods,
+
+
+        "unusual":
+            unusual,
+
+
+        "risk_profile":
+            risk_profile,
+
+
+        "signals":
+            signals,
+
+
+
+        # enriquecimiento SOC
+
+        "observations":
+            observations,
+
+
+        "stimuli":
+            stimuli,
+
+
+        "backend_profile":
+            backend_profile,
+
+
+        "meta":
+
+            {
+
+                "analysis":
+                    "backend_behavior_surface",
+
+
+                "state_change":
+                    False,
+
+
+                "correlation_ready":
+                    True
+
+            }
+
     }
 
 
@@ -528,71 +1931,221 @@ def backend_surface(session, url):
 # ------------------------ SCORING (ADVANCED) ----------------------------
 def score(sig):
     """
-    Scoring heurístico forense.
-    Prioriza correlaciones reales, no flags aislados.
+    Scoring heurístico multidimensional.
+
+    No mide vulnerabilidades.
+    Mide concentración de señales:
+    - comportamiento HTTP
+    - dinámica temporal
+    - arquitectura frontend
+    - superficie backend
+    - coherencia entre capas
+
+    Filosofía:
+    Una señal aislada es ruido.
+    Varias capas alineadas forman evidencia.
     """
 
-    s = 0
+    score = 0
+    correlations = 0
 
-    # --- HTTP semantics
-    if sig["http"].get("hash_change"):
-        s += 3
-
-    if sig["http"].get("etag"):
-        s += 1  # cache inteligente → posible A/B o personalización
-
-    # --- Timing
+    http = sig.get("http", {})
     timing = sig.get("timing", {})
-    if timing.get("jitter_high"):
-        s += 2
-
-    if timing.get("method_gap"):
-        s += 2
-
-    if "method_processing_gap" in timing.get("signals", []):
-        s += 2
-
-    # --- DOM profundo
     dom = sig.get("dom", {})
-
-    if dom.get("hidden_inputs", 0) > 0:
-        s += 2
-
-    if dom.get("hidden_sensitive"):
-        s += 3  # tokens / estado interno real
-
-    if dom.get("js_network"):
-        s += 2
-
-    if "spa_frontend" in dom.get("signals", []):
-        s += 1
-
-    # --- Superficie backend
     surface = sig.get("surface", {})
 
-    if surface.get("unusual"):
-        s += 3
 
-    if surface.get("risk_profile") == "elevated":
-        s += 2
-    elif surface.get("risk_profile") == "moderate":
-        s += 1
+    # =====================================================
+    # HTTP SEMANTICS
+    # =====================================================
 
-    # --- Bonus por correlación (la magia real)
+    if http.get("hash_change"):
+        score += 3
+
+    if http.get("etag"):
+        score += 1
+
+
+    cache = http.get("cache_signals", {})
+
+    if cache.get("cache_ambiguous"):
+        score += 1
+
+
+    if http.get("semantic_mismatch"):
+        score += 2
+
+
+
+    # =====================================================
+    # TIMING BEHAVIOR
+    # =====================================================
+
+    if timing.get("jitter_high"):
+        score += 2
+
+    if timing.get("method_gap"):
+        score += 2
+
+
+    timing_signals = timing.get("signals", [])
+
+    if "method_processing_gap" in timing_signals:
+        score += 2
+
+
+    if "options_heavy_logic" in timing_signals:
+        score += 1
+
+
+    if "uniform_backend_path" in timing_signals:
+        score += 1
+
+
+
+    # =====================================================
+    # DOM / FRONTEND INTELLIGENCE
+    # =====================================================
+
+    hidden = dom.get("hidden_inputs", 0)
+
+    if hidden:
+        score += 2
+
+
+    if dom.get("hidden_sensitive"):
+        score += 3
+
+
+    if dom.get("js_network"):
+        score += 2
+
+
+    dom_signals = dom.get("signals", [])
+
+
+    if "spa_frontend" in dom_signals:
+        score += 1
+
+
+    if "logic_externalized" in dom_signals:
+        score += 1
+
+
+
+    # =====================================================
+    # BACKEND SURFACE
+    # =====================================================
+
+    unusual = surface.get("unusual", [])
+
+    if unusual:
+        score += 3
+
+
+    risk = surface.get("risk_profile")
+
+
+    if risk == "elevated":
+        score += 2
+
+    elif risk == "moderate":
+        score += 1
+
+
+
+    surface_signals = surface.get("signals", [])
+
+
+    if "method_override_accepted" in surface_signals:
+        score += 3
+
+
+    if "gateway_or_proxy_detected" in surface_signals:
+        score += 1
+
+
+
+    # =====================================================
+    # CORRELACIÓN MULTICAPA
+    # =====================================================
+
+    #
+    # No buscamos indicadores.
+    # Buscamos comportamiento coherente.
+    #
+
+
     if (
-        sig["http"].get("hash_change")
+        http.get("hash_change")
         and dom.get("js_network")
         and timing.get("method_gap")
     ):
-        s += 3  # frontend + backend + tiempo alineados
+        score += 3
+        correlations += 1
 
-    return s
+
+
+    if (
+        dom.get("hidden_sensitive")
+        and surface.get("methods")
+        and timing.get("method_gap")
+    ):
+        score += 3
+        correlations += 1
+
+
+
+    if (
+        http.get("semantic_mismatch")
+        and dom.get("js_network")
+    ):
+        score += 2
+        correlations += 1
+
+
+
+    # =====================================================
+    # CONTEXTO SOC
+    # =====================================================
+
+    if correlations >= 3:
+        score += 3
+
+    elif correlations == 2:
+        score += 2
+
+    elif correlations == 1:
+        score += 1
+
+
+
+    # =====================================================
+    # NORMALIZACIÓN
+    # =====================================================
+
+    if score < 0:
+        score = 0
+
+
+    return score
 
 # ------------------------ INTERPRETACIÓN (ADVANCED) ----------------------
 def insights(sig):
     """
-    Interpretación cognitiva de señales.
-    Traduce heurística → significado operacional.
+    Interpretación cognitiva multidimensional.
+
+    Traduce señales técnicas:
+        evento -> contexto -> significado operacional
+
+    No confirma vulnerabilidades.
+    Explica comportamientos observables.
+
+    Diseñado para:
+    - SOC analysis
+    - threat modeling
+    - arquitectura inversa
+    - lectura de superficie
     """
 
     out = []
@@ -602,205 +2155,819 @@ def insights(sig):
     dom = sig.get("dom", {})
     surface = sig.get("surface", {})
 
-    # --- HTTP
+
+    # =====================================================
+    # HTTP BEHAVIOR
+    # =====================================================
+
     if http.get("hash_change"):
         out.append(
-            "Respuesta no determinística → estado interno, personalización o A/B testing activo."
+            "Respuesta variable detectada → existe comportamiento dinámico "
+            "(estado interno, personalización, experimentación o generación bajo demanda)."
         )
+
 
     if http.get("etag"):
         out.append(
-            "ETag presente → cache inteligente o backend consciente del cliente."
+            "ETag presente → el sistema mantiene mecanismos de validación "
+            "de representación o cache consciente del recurso."
         )
 
-    # --- Timing
+
+    cache = http.get("cache_signals", {})
+
+    if cache.get("cache_ambiguous"):
+        out.append(
+            "Política de cache poco evidente → posible lógica intermedia "
+            "entre cliente, proxy y aplicación."
+        )
+
+
+    if http.get("semantic_mismatch"):
+        out.append(
+            "Respuesta declarada y contenido no coinciden → revisar "
+            "coherencia entre capa HTTP y aplicación."
+        )
+
+
+
+    # =====================================================
+    # TEMPORAL INTELLIGENCE
+    # =====================================================
+
     if timing.get("method_gap"):
         out.append(
-            "Diferencias temporales por método → rutas backend distintas o middleware condicional."
+            "Métodos HTTP presentan comportamiento temporal diferente → "
+            "posibles rutas internas diferenciadas, middleware o controles condicionales."
         )
+
 
     if "method_processing_gap" in timing.get("signals", []):
+
         out.append(
-            "GET y OPTIONS no recorren el mismo flujo → posible control por rol, WAF o gateway."
+            "GET y OPTIONS parecen recorrer caminos distintos → "
+            "existe separación lógica entre capas de procesamiento."
         )
+
+
+    if "options_heavy_logic" in timing.get("signals", []):
+
+        out.append(
+            "OPTIONS muestra procesamiento elevado → "
+            "posible gateway, framework routing o capa intermedia activa."
+        )
+
 
     if timing.get("jitter_high"):
+
         out.append(
-            "Inestabilidad temporal → colas, balanceadores o servicios elásticos."
+            "Variación temporal elevada → comportamiento compatible con "
+            "balanceo, servicios distribuidos, colas o infraestructura dinámica."
         )
 
-    # --- DOM
+
+
+    # =====================================================
+    # FRONTEND / DOM INTELLIGENCE
+    # =====================================================
+
     if dom.get("hidden_sensitive"):
+
         out.append(
-            "Tokens ocultos detectados → flujos de estado multi-paso o validaciones internas."
+            "Elementos ocultos con información sensible aparente → "
+            "la aplicación mantiene estado interno o flujos multi-etapa."
         )
+
 
     if dom.get("js_network"):
+
         out.append(
-            "Frontend genera tráfico activo → APIs no evidentes desde la UI."
+            "JavaScript genera comunicación activa → "
+            "la superficie funcional puede extenderse más allá del HTML visible."
         )
 
-    if "spa_frontend" in dom.get("signals", []):
+
+    dom_signals = dom.get("signals", [])
+
+
+    if "spa_frontend" in dom_signals:
+
         out.append(
-            "Arquitectura SPA → superficie real en APIs, no en rutas HTML clásicas."
+            "Frontend SPA detectado → "
+            "la lógica principal probablemente reside en APIs y servicios auxiliares."
         )
 
-    # --- Superficie backend
+
+    if "logic_externalized" in dom_signals:
+
+        out.append(
+            "Lógica externalizada → arquitectura separada entre presentación y recursos externos."
+        )
+
+
+
+    # =====================================================
+    # BACKEND SURFACE
+    # =====================================================
+
     if surface.get("unusual"):
+
         out.append(
-            "Métodos HTTP poco comunes expuestos → desalineación entre diseño y despliegue."
+            "Métodos HTTP fuera del patrón común observados → "
+            "la interfaz expuesta merece revisión arquitectónica."
         )
 
-    if surface.get("risk_profile") == "elevated":
+
+    risk = surface.get("risk_profile")
+
+
+    if risk == "elevated":
+
         out.append(
-            "Superficie backend elevada → priorizar revisión manual y correlación."
+            "Superficie backend con señales elevadas → "
+            "requiere correlación manual antes de sacar conclusiones."
         )
 
-    # --- Insight de alto nivel (correlación)
+
+    elif risk == "moderate":
+
+        out.append(
+            "Superficie backend moderada → "
+            "existen componentes adicionales visibles desde fuera."
+        )
+
+
+
+    # =====================================================
+    # CORRELACIONES PROFUNDAS
+    # =====================================================
+
+
     if (
         http.get("hash_change")
         and dom.get("js_network")
         and timing.get("method_gap")
     ):
+
         out.append(
-            "Frontend reactivo + backend condicional → alta probabilidad de lógica no documentada."
+            "Frontend dinámico + respuestas variables + diferencias temporales → "
+            "posible arquitectura con lógica condicional no visible."
         )
 
-    if not out:
+
+    if (
+        dom.get("hidden_sensitive")
+        and surface.get("methods")
+        and timing.get("method_gap")
+    ):
+
         out.append(
-            "Superficie homogénea → backend plano o bien encapsulado."
+            "Estado interno + métodos expuestos + rutas diferenciadas → "
+            "modelo de aplicación con múltiples capas de decisión."
         )
+
+
+    if (
+        http.get("etag")
+        and dom.get("js_network")
+    ):
+
+        out.append(
+            "Cache inteligente junto a frontend activo → "
+            "posible optimización para usuarios dinámicos o contenido personalizado."
+        )
+
+
+
+    # =====================================================
+    # LECTURA FINAL
+    # =====================================================
+
+    if len(out) >= 6:
+
+        out.append(
+            "Múltiples capas presentan actividad coherente → "
+            "la superficie observable representa una arquitectura compleja."
+        )
+
+
+    if not out:
+
+        out.append(
+            "Superficie homogénea → comportamiento consistente, "
+            "sin señales fuertes de complejidad externa."
+        )
+
 
     return out
 
 
 # ------------------------ ORQUESTADOR ---------------------------------
 def scan(url):
+    """
+    Orquestador principal de observación web.
+
+    Ejecuta una lectura multicapa:
+
+        HTTP
+          ↓
+        DOM
+          ↓
+        Timing
+          ↓
+        Backend Surface
+          ↓
+        Correlación cognitiva
+
+    No explota.
+    No modifica estado.
+    Solo observa comportamiento externo.
+
+    Diseñado para análisis SOC,
+    threat modeling y arquitectura inversa.
+    """
+
     session = build_session()
+
     phases = {}
     warnings = []
+    execution = {}
 
-    # --- HTTP semantics
+    start_scan = time.time()
+
+
+    # =====================================================
+    # HTTP SEMANTICS
+    # =====================================================
+
     t0 = time.time()
+
     try:
-        http, resp = http_semantics(session, url)
+
+        http, resp = http_semantics(
+            session,
+            url
+        )
+
+        execution["http"] = "completed"
+
     except Exception as e:
+
         http, resp = {}, None
-        warnings.append(f"http_semantics_error: {type(e).__name__}")
-    phases["http"] = round(time.time() - t0, 3)
 
-    # --- DOM profundo
+        warnings.append(
+            f"http_semantics_error: {type(e).__name__}"
+        )
+
+        execution["http"] = "failed"
+
+
+    phases["http"] = round(
+        time.time() - t0,
+        3
+    )
+
+
+
+    # =====================================================
+    # DOM DEEP ANALYSIS
+    # =====================================================
+
     t0 = time.time()
+
     try:
-        dom = dom_deep(resp.text if resp else "")
+
+        dom = dom_deep(
+            resp.text if resp else ""
+        )
+
+        execution["dom"] = "completed"
+
+
     except Exception as e:
+
         dom = {}
-        warnings.append(f"dom_error: {type(e).__name__}")
-    phases["dom"] = round(time.time() - t0, 3)
 
-    # --- Timing
+        warnings.append(
+            f"dom_error: {type(e).__name__}"
+        )
+
+        execution["dom"] = "failed"
+
+
+    phases["dom"] = round(
+        time.time() - t0,
+        3
+    )
+
+
+
+    # =====================================================
+    # TEMPORAL DIFFERENCE
+    # =====================================================
+
     t0 = time.time()
+
     try:
-        timing = timing_diff(session, url)
+
+        timing = timing_diff(
+            session,
+            url
+        )
+
+        execution["timing"] = "completed"
+
+
     except Exception as e:
+
         timing = {}
-        warnings.append(f"timing_error: {type(e).__name__}")
-    phases["timing"] = round(time.time() - t0, 3)
 
-    # --- Superficie backend
+        warnings.append(
+            f"timing_error: {type(e).__name__}"
+        )
+
+        execution["timing"] = "failed"
+
+
+    phases["timing"] = round(
+        time.time() - t0,
+        3
+    )
+
+
+
+    # =====================================================
+    # BACKEND SURFACE
+    # =====================================================
+
     t0 = time.time()
+
     try:
-        surface = backend_surface(session, url)
+
+        surface = backend_surface(
+            session,
+            url
+        )
+
+        execution["surface"] = "completed"
+
+
     except Exception as e:
+
         surface = {}
-        warnings.append(f"surface_error: {type(e).__name__}")
-    phases["surface"] = round(time.time() - t0, 3)
+
+        warnings.append(
+            f"surface_error: {type(e).__name__}"
+        )
+
+        execution["surface"] = "failed"
+
+
+    phases["surface"] = round(
+        time.time() - t0,
+        3
+    )
+
+
+
+    # =====================================================
+    # SIGNAL PACKAGE
+    # =====================================================
 
     sig = {
+
         "http": http,
+
         "dom": dom,
+
         "timing": timing,
+
         "surface": surface
     }
 
+
+
+    # =====================================================
+    # COGNITIVE LAYER
+    # =====================================================
+
+    try:
+
+        priority = score(sig)
+
+    except Exception as e:
+
+        priority = 0
+
+        warnings.append(
+            f"score_error: {type(e).__name__}"
+        )
+
+
+    try:
+
+        generated_insights = insights(sig)
+
+    except Exception as e:
+
+        generated_insights = []
+
+        warnings.append(
+            f"insights_error: {type(e).__name__}"
+        )
+
+
+
+    # =====================================================
+    # FINAL OBSERVATION
+    # =====================================================
+
     return {
+
         "url": url,
+
+
         "signals": sig,
-        "priority": score(sig),
-        "insights": insights(sig),
+
+
+        "priority": priority,
+
+
+        "insights": generated_insights,
+
+
         "meta": {
+
             "phases_sec": phases,
-            "warnings": warnings
+
+
+            "warnings": warnings,
+
+
+            "execution": execution,
+
+
+            "runtime_sec": round(
+                time.time() - start_scan,
+                3
+            ),
+
+
+            "analysis": {
+
+                "layers": [
+                    "http",
+                    "dom",
+                    "timing",
+                    "backend"
+                ],
+
+                "mode":
+                    "passive_behavioral_observation",
+
+                "correlation_ready":
+                    True
+            }
         }
     }
 
 
 # ------------------------ VISUAL NEON ---------------------------------
 def render(report):
-    console.print(Panel(
-        Text("OsintSignalsF — NEON SURGICAL MODE", style="bold neon_magenta"),
-        border_style="bright_cyan"
-    ))
+    """
+    Render multidimensional SOC.
+
+    No transforma datos.
+    No elimina señales.
+    Solo organiza la observación
+    para lectura humana.
+
+    Diseñado para:
+    - OSINT
+    - SOC
+    - análisis forense
+    - correlación multicapa
+    """
+
+    console.print(
+        Panel(
+            Text(
+                "OsintSignalsF — NEON SURGICAL MULTI-DIMENSIONAL MODE",
+                style="bold neon_magenta"
+            ),
+            border_style="bright_cyan"
+        )
+    )
+
+
+    # =====================================================
+    # HELPERS
+    # =====================================================
+
+    def flatten(data, prefix=""):
+
+        lines = []
+
+        if isinstance(data, dict):
+
+            for k, v in data.items():
+
+                key = (
+                    f"{prefix}.{k}"
+                    if prefix
+                    else str(k)
+                )
+
+                lines.extend(
+                    flatten(v, key)
+                )
+
+
+        elif isinstance(data, list):
+
+            for i, item in enumerate(data):
+
+                key = f"{prefix}[{i}]"
+
+                lines.extend(
+                    flatten(item, key)
+                )
+
+
+        else:
+
+            lines.append(
+                (
+                    prefix,
+                    data
+                )
+            )
+
+
+        return lines
+
+
+
+    # =====================================================
+    # SIGNAL TABLE
+    # =====================================================
 
     table = Table(
-        title="🧬 Señales Backend & Forenses",
+        title="🧬 MATRIZ MULTICAPA DE SEÑALES",
         header_style="bold bright_yellow",
         show_lines=True
     )
-    table.add_column("Capa", style="bold bright_blue")
-    table.add_column("Detalle", style="bright_green")
 
-    color_map = {
-        "http": "bright_cyan",
-        "dom": "bright_magenta",
-        "timing": "bright_yellow",
-        "surface": "bright_red"
+
+    table.add_column(
+        "Capa",
+        style="bold bright_blue"
+    )
+
+    table.add_column(
+        "Señal",
+        style="bright_green"
+    )
+
+    table.add_column(
+        "Valor",
+        style="white"
+    )
+
+
+
+    colors = {
+
+        "http":
+            "bright_cyan",
+
+        "dom":
+            "bright_magenta",
+
+        "timing":
+            "bright_yellow",
+
+        "surface":
+            "bright_red"
     }
 
-    for k, v in report["signals"].items():
-        style = color_map.get(k, "white")
-        detail = str(v)
-        if len(detail) > 400:
-            detail = detail[:400] + "…"
-        table.add_row(k, Text(detail, style=style))
+
+
+    signals = report.get(
+        "signals",
+        {}
+    )
+
+
+    for layer, data in signals.items():
+
+        color = colors.get(
+            layer,
+            "white"
+        )
+
+
+        flattened = flatten(
+            data
+        )
+
+
+        if not flattened:
+
+            table.add_row(
+                Text(layer, style=color),
+                "-",
+                "sin datos"
+            )
+
+            continue
+
+
+
+        first = True
+
+
+        for key, value in flattened:
+
+
+            table.add_row(
+
+                Text(
+                    layer if first else "",
+                    style=color
+                ),
+
+                Text(
+                    str(key),
+                    style=color
+                ),
+
+                str(value)
+
+            )
+
+
+            first = False
+
+
 
     console.print(table)
 
-    # --- Interpretación
-    insights_text = "\n".join(f"• {i}" for i in report["insights"]) or "Sin hallazgos críticos"
-    console.print(Panel(
-        insights_text,
-        title="🧠 Interpretación Cognitiva",
-        border_style="bright_magenta"
-    ))
 
-    # --- Prioridad
-    prio_style = "bright_green"
-    if report["priority"] >= 10:
-        prio_style = "bright_red"
-    elif report["priority"] >= 6:
-        prio_style = "bright_yellow"
 
-    console.print(Panel(
-        Text(f"PRIORITY SCORE: {report['priority']}", style=f"bold {prio_style}"),
-        title="🔥 Prioridad",
-        border_style=prio_style
-    ))
+    # =====================================================
+    # COGNITIVE LAYER
+    # =====================================================
 
-    # --- Meta
-    meta = report.get("meta", {})
+    insights = report.get(
+        "insights",
+        []
+    )
+
+
+    if insights:
+
+        console.print(
+
+            Panel(
+
+                "\n".join(
+                    f"🧠 {i}"
+                    for i in insights
+                ),
+
+                title="Interpretación Cognitiva",
+
+                border_style="bright_magenta"
+            )
+        )
+
+
+
+    # =====================================================
+    # PRIORITY ENGINE
+    # =====================================================
+
+    priority = report.get(
+        "priority",
+        0
+    )
+
+
+    if priority >= 10:
+
+        style = "bright_red"
+
+    elif priority >= 6:
+
+        style = "bright_yellow"
+
+    else:
+
+        style = "bright_green"
+
+
+
+    console.print(
+
+        Panel(
+
+            Text(
+                f"PRIORITY SCORE: {priority}",
+                style=f"bold {style}"
+            ),
+
+            title="🔥 Evaluación",
+
+            border_style=style
+        )
+    )
+
+
+
+    # =====================================================
+    # TELEMETRY
+    # =====================================================
+
+    meta = report.get(
+        "meta",
+        {}
+    )
+
+
     if meta:
-        meta_lines = []
-        if meta.get("phases_sec"):
-            meta_lines.append("⏱️ Fases (s): " + str(meta["phases_sec"]))
-        if meta.get("warnings"):
-            meta_lines.append("⚠️ Avisos: " + ", ".join(meta["warnings"]))
 
-        console.print(Panel(
-            "\n".join(meta_lines),
-            title="🧪 Meta & Telemetría",
+
+        meta_table = Table(
+            title="⚙️ Telemetría del Observador",
+            show_lines=True
+        )
+
+
+        meta_table.add_column(
+            "Elemento"
+        )
+
+
+        meta_table.add_column(
+            "Valor"
+        )
+
+
+        for key, value in meta.items():
+
+
+            if isinstance(value, (dict,list)):
+
+                value = "\n".join(
+                    f"- {x}: {y}"
+                    for x,y in flatten(value)
+                )
+
+
+            meta_table.add_row(
+                str(key),
+                str(value)
+            )
+
+
+        console.print(
+            meta_table
+        )
+
+
+
+    # =====================================================
+    # RESUMEN OPERACIONAL
+    # =====================================================
+
+    total_signals = len(
+        flatten(signals)
+    )
+
+
+    console.print(
+
+        Panel(
+
+            Text(
+
+                f"""
+🔍 Señales extraídas: {total_signals}
+🧬 Capas analizadas: {len(signals)}
+⚙️ Estado: {'Completo' if not report.get('meta',{}).get('warnings') else 'Parcial'}
+🧠 Motor: Correlación multidimensional
+""",
+
+                style="bold bright_cyan"
+            ),
+
+            title="Estado del Observador",
+
             border_style="bright_blue"
-        ))
+
+        )
+    )
 
 # ----------------------------- CLI (NEON ALCHEMICAL MODE) -----------------------------
 def graceful_exit(signum, frame):
@@ -811,13 +2978,153 @@ def graceful_exit(signum, frame):
 signal.signal(signal.SIGINT, graceful_exit)
 
 def neon_banner():
-    title = Text("OSINTSIGNALSF", style="bold neon_magenta")
-    subtitle = Text(
-        "NEON ALCHEMICAL MODE — Surgical Intelligence Engine — ByMakaveli New Era",
-        style="bright_cyan"
+    """
+    Banner de identidad del motor.
+
+    No es decoración.
+    Representa estado:
+    observación activa,
+    inteligencia silenciosa
+    y análisis multicapa.
+    """
+
+    console.print()
+
+    # =====================================================
+    # CAPA PRINCIPAL
+    # =====================================================
+
+    title = Text(
+        justify="center"
     )
-    body = Align.center(title + "\n" + subtitle)
-    console.print(Panel(body, border_style="bright_magenta"))
+
+    title.append(
+        "O S I N T S I G N A L S F\n",
+        style="bold bright_magenta"
+    )
+
+    title.append(
+        "◢ NEON ALCHEMICAL INTELLIGENCE ENGINE ◣",
+        style="bold bright_cyan"
+    )
+
+
+    # =====================================================
+    # SUBTÍTULO
+    # =====================================================
+
+    subtitle = Text(
+        justify="center"
+    )
+
+
+    subtitle.append(
+        "\n\n"
+        "SURGICAL OBSERVATION  •  MULTI-LAYER SIGNAL FUSION\n",
+        style="bright_blue"
+    )
+
+
+    subtitle.append(
+        "Passive Intelligence  •  Behavioral Analysis  •  Reality Mapping\n",
+        style="dim bright_cyan"
+    )
+
+
+    subtitle.append(
+        "\n"
+        "ByMakaveli — New Era Protocol",
+        style="bold bright_magenta"
+    )
+
+
+
+    # =====================================================
+    # ESTADO DEL MOTOR
+    # =====================================================
+
+    status = Text(
+        justify="center"
+    )
+
+
+    status.append(
+        "\n\n"
+        "◆ ENGINE STATUS: ",
+        style="dim white"
+    )
+
+
+    status.append(
+        "ONLINE",
+        style="bold bright_green"
+    )
+
+
+    status.append(
+        "   ◆ MODE: ",
+        style="dim white"
+    )
+
+
+    status.append(
+        "OBSERVATION",
+        style="bold bright_yellow"
+    )
+
+
+    status.append(
+        "\n"
+        "◆ SIGNAL FUSION: ACTIVE",
+        style="bold bright_cyan"
+    )
+
+
+
+    # =====================================================
+    # ENSAMBLE VISUAL
+    # =====================================================
+
+    body = Align.center(
+        title +
+        subtitle +
+        status
+    )
+
+
+    console.print(
+
+        Panel(
+
+            body,
+
+            border_style="bright_magenta",
+
+            padding=(1,8),
+
+            title="⧉ REALITY OBSERVER CORE ⧉",
+
+            title_align="center"
+
+        )
+
+    )
+
+
+    # =====================================================
+    # FIRMA INFERIOR
+    # =====================================================
+
+    footer = Text(
+        "\n     observe quietly • correlate deeply • decide precisely\n",
+        style="italic dim bright_cyan",
+        justify="center"
+    )
+
+
+    console.print(
+        footer
+    )
 
 def validate_url(url: str) -> str:
     if not isinstance(url, str):
